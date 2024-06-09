@@ -1,0 +1,10 @@
+{
+  "scopes": [
+    {
+      "value": "undpre",
+      "name": "undpre:                  anything Under Pressure specific"
+    }
+  ],
+  "scopesSearchValue": true,
+  "allowCustomScopes": false
+}
