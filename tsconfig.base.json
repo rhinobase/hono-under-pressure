@@ -15,7 +15,7 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@hono-hub/under-pressure": ["packages/under-pressure/src/index.ts"]
+      "@honohub/under-pressure": ["packages/under-pressure/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
