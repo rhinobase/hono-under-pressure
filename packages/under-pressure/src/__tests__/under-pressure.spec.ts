@@ -1,4 +1,4 @@
-import { underPressure } from "./under-pressure";
+import { underPressure } from "../";
 
 describe("underPressure", () => {
   it("should work", () => {

@@ -5,7 +5,7 @@
   "scripts": {
     "commit": "czg",
     "prepare": "is-ci || husky",
-    "format": "biome check --apply ."
+    "format": "biome check --write ."
   },
   "private": true,
   "devDependencies": {
