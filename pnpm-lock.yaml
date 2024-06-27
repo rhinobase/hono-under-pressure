@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      hono:
+        specifier: ^4.4.8
+        version: 4.4.8
     devDependencies:
       '@biomejs/biome':
         specifier: ^1.8.0
@@ -35,6 +39,9 @@ importers:
       '@swc/helpers':
         specifier: ~0.5.11
         version: 0.5.11
+      '@types/node':
+        specifier: '18'
+        version: 18.16.9
       '@vitest/coverage-v8':
         specifier: ^1.0.4
         version: 1.6.0(vitest@1.6.0)
@@ -5149,6 +5156,11 @@ packages:
     resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
     hasBin: true
     dev: true
+
+  /hono@4.4.8:
+    resolution: {integrity: sha512-eewnSgTzdWgFVn97kPV24h+9UVNUQ+9mj6IRxr7dBseTaTBSHtFo/T/vRNcqJkQFysVoXyecflr3Xe/fdvzEpQ==}
+    engines: {node: '>=16.0.0'}
+    dev: false
 
   /hosted-git-info@7.0.2:
     resolution: {integrity: sha512-puUZAUKT5m8Zzvs72XWy3HtvVbTWljRE66cP60bxJzAqf2DgICo7lYTY2IHUmLnNpjYvw5bvmoHvPc0QO2a62w==}

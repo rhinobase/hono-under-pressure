@@ -1,24 +1,35 @@
-import type { Env, Input, MiddlewareHandler } from "hono";
-import { HTTPException } from "hono/http-exception"
+import type { Context, Env, Input, Next } from "hono";
 import { createFactory } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
 import { type ConfigType, PressureType } from "./types";
-import assert = require('node:assert');
-import { type EventLoopUtilization, type IntervalHistogram, monitorEventLoopDelay, performance } from 'node:perf_hooks';
+import assert = require("node:assert");
+import {
+  type EventLoopUtilization,
+  type IntervalHistogram,
+  monitorEventLoopDelay,
+  performance,
+} from "node:perf_hooks";
 const eventLoopUtilization = performance.eventLoopUtilization;
 
-const SERVICE_UNAVAILABLE = 503
-const createError = (message = 'Service Unavailable') => new HTTPException(SERVICE_UNAVAILABLE, { message })
+const SERVICE_UNAVAILABLE = 503;
+const createError = (message = "Service Unavailable") =>
+  new HTTPException(SERVICE_UNAVAILABLE, { message });
 
-function getSampleInterval(value: number | undefined, eventLoopResolution: number) {
-  const defaultValue = monitorEventLoopDelay ? 1000 : 5
-  const sampleInterval = value || defaultValue
-  return monitorEventLoopDelay ? Math.max(eventLoopResolution, sampleInterval) : sampleInterval
+function getSampleInterval(
+  value: number | undefined,
+  eventLoopResolution: number
+) {
+  const defaultValue = monitorEventLoopDelay ? 1000 : 5;
+  const sampleInterval = value || defaultValue;
+  return monitorEventLoopDelay
+    ? Math.max(eventLoopResolution, sampleInterval)
+    : sampleInterval;
 }
 
 export function factoryWithUnderPressure<
   E extends Env = Env,
   P extends string = string,
-  I extends Input = Input,
+  I extends Input = Input
 >(config: ConfigType<E, P, I> = {}) {
   const resolution = 10;
   const {
@@ -29,247 +40,332 @@ export function factoryWithUnderPressure<
     healthCheck = false,
     healthCheckInterval = -1,
     maxEventLoopUtilization = 0,
-    pressureHandler
+    pressureHandler,
   } = config;
 
-  const UnderPressureError = config.customError || createError(config.message)
+  const UnderPressureError = config.customError || createError(config.message);
 
   const checkMaxEventLoopDelay = maxEventLoopDelay > 0;
   const checkMaxHeapUsedBytes = maxHeapUsedBytes > 0;
   const checkMaxRssBytes = maxRssBytes > 0;
-  const checkMaxEventLoopUtilization = eventLoopUtilization ? maxEventLoopUtilization > 0 : false
+  const checkMaxEventLoopUtilization = eventLoopUtilization
+    ? maxEventLoopUtilization > 0
+    : false;
 
-  let heapUsed = 0
-  let rssBytes = 0
-  let eventLoopDelay = 0
+  let heapUsed = 0;
+  let rssBytes = 0;
+  let eventLoopDelay = 0;
   let lastCheck: number;
-  let histogram: IntervalHistogram
+  let histogram: IntervalHistogram;
   let elu: EventLoopUtilization;
-  let eventLoopUtilized = 0
+  let eventLoopUtilized = 0;
 
   if (monitorEventLoopDelay) {
-    histogram = monitorEventLoopDelay({ resolution })
-    histogram.enable()
+    histogram = monitorEventLoopDelay({ resolution });
+    histogram.enable();
   } else {
-    lastCheck = now()
+    lastCheck = now();
   }
 
   if (eventLoopUtilization) {
-    elu = eventLoopUtilization()
+    elu = eventLoopUtilization();
   }
 
   // TODO: Add create factory function
 
   createFactory({
     initApp: (app) => {
-      app.on()
-    }
-  })
+      app.on();
+    },
+  });
 
-  fastify.decorate('memoryUsage', memoryUsage)
-  fastify.decorate('isUnderPressure', isUnderPressure)
+  fastify.decorate("memoryUsage", memoryUsage);
+  fastify.decorate("isUnderPressure", isUnderPressure);
 
-  const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval)
-  timer.unref()
+  const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval);
+  timer.unref();
 
-  let externalsHealthy = false
-  let externalHealthCheckTimer
+  let externalsHealthy = false;
+  let externalHealthCheckTimer;
   if (healthCheck) {
-    assert(typeof healthCheck === 'function', 'config.healthCheck should be a function that returns a promise that resolves to true or false')
-    assert(healthCheckInterval > 0 || config.exposeStatusRoute, 'config.healthCheck requires config.healthCheckInterval or config.exposeStatusRoute')
+    assert(
+      typeof healthCheck === "function",
+      "config.healthCheck should be a function that returns a promise that resolves to true or false"
+    );
+    assert(
+      healthCheckInterval > 0 || config.exposeStatusRoute,
+      "config.healthCheck requires config.healthCheckInterval or config.exposeStatusRoute"
+    );
 
     const doCheck = async () => {
       try {
-        externalsHealthy = await healthCheck(fastify)
+        externalsHealthy = await healthCheck(fastify);
       } catch (error) {
-        externalsHealthy = false
-        fastify.log.error({ error }, 'external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.')
+        externalsHealthy = false;
+        fastify.log.error(
+          { error },
+          "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy."
+        );
       }
-    }
+    };
 
-    await doCheck()
+    await doCheck();
 
     if (healthCheckInterval > 0) {
       const beginCheck = async () => {
-        await doCheck()
-        externalHealthCheckTimer.refresh()
-      }
+        await doCheck();
+        externalHealthCheckTimer.refresh();
+      };
 
-      externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval)
-      externalHealthCheckTimer.unref()
+      externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval);
+      externalHealthCheckTimer.unref();
     }
   } else {
-    externalsHealthy = true
+    externalsHealthy = true;
   }
 
-  fastify.addHook('onClose', onClose)
+  fastify.addHook("onClose", onClose);
 
-  config.exposeStatusRoute = mapExposeStatusRoute(config.exposeStatusRoute)
+  config.exposeStatusRoute = mapExposeStatusRoute(config.exposeStatusRoute);
 
   if (config.exposeStatusRoute) {
     fastify.route({
       ...config.exposeStatusRoute.routeOpts,
       url: config.exposeStatusRoute.url,
-      method: 'GET',
+      method: "GET",
       schema: Object.assign({}, config.exposeStatusRoute.routeSchemaOpts, {
         response: {
           200: {
-            type: 'object',
-            description: 'Health Check Succeeded',
+            type: "object",
+            description: "Health Check Succeeded",
             properties: Object.assign(
-              { status: { type: 'string' } },
+              { status: { type: "string" } },
               config.exposeStatusRoute.routeResponseSchemaOpts
             ),
             example: {
-              status: 'ok'
-            }
+              status: "ok",
+            },
           },
           500: {
-            type: 'object',
-            description: 'Error Performing Health Check',
+            type: "object",
+            description: "Error Performing Health Check",
             properties: {
-              message: { type: 'string', description: 'Error message for failure during health check', example: 'Internal Server Error' },
-              statusCode: { type: 'number', description: 'Code representing the error. Always matches the HTTP response code.', example: 500 }
-            }
+              message: {
+                type: "string",
+                description: "Error message for failure during health check",
+                example: "Internal Server Error",
+              },
+              statusCode: {
+                type: "number",
+                description:
+                  "Code representing the error. Always matches the HTTP response code.",
+                example: 500,
+              },
+            },
           },
           503: {
-            type: 'object',
-            description: 'Health Check Failed',
+            type: "object",
+            description: "Health Check Failed",
             properties: {
-              code: { type: 'string', description: 'Error code associated with the failing check', example: 'FST_UNDER_PRESSURE' },
-              error: { type: 'string', description: 'Error thrown during health check', example: 'Service Unavailable' },
-              message: { type: 'string', description: 'Error message to explain health check failure', example: 'Service Unavailable' },
-              statusCode: { type: 'number', description: 'Code representing the error. Always matches the HTTP response code.', example: 503 }
-            }
-          }
-        }
+              code: {
+                type: "string",
+                description: "Error code associated with the failing check",
+                example: "FST_UNDER_PRESSURE",
+              },
+              error: {
+                type: "string",
+                description: "Error thrown during health check",
+                example: "Service Unavailable",
+              },
+              message: {
+                type: "string",
+                description: "Error message to explain health check failure",
+                example: "Service Unavailable",
+              },
+              statusCode: {
+                type: "number",
+                description:
+                  "Code representing the error. Always matches the HTTP response code.",
+                example: 503,
+              },
+            },
+          },
+        },
       }),
-      handler: onStatus
-    })
+      handler: onStatus,
+    });
   }
 
-  if (checkMaxEventLoopUtilization === false && checkMaxEventLoopDelay === false &&
+  if (
+    checkMaxEventLoopUtilization === false &&
+    checkMaxEventLoopDelay === false &&
     checkMaxHeapUsedBytes === false &&
     checkMaxRssBytes === false &&
-    healthCheck === false) {
-    return
+    healthCheck === false
+  ) {
+    return;
   }
 
-  const underPressureError = new UnderPressureError()
-  const retryAfter = config.retryAfter || 10
+  const underPressureError = new UnderPressureError();
+  const retryAfter = config.retryAfter || 10;
 
-  fastify.addHook('onRequest', onRequest)
+  fastify.addHook("onRequest", onRequest);
 
   function mapExposeStatusRoute(opts?: string | { url: string }) {
     if (!opts) {
-      return false
+      return false;
     }
-    if (typeof opts === 'string') {
-      return { url: opts }
+    if (typeof opts === "string") {
+      return { url: opts };
     }
-    return Object.assign({ url: '/status' }, opts)
+    return Object.assign({ url: "/status" }, opts);
   }
 
   function updateEventLoopDelay() {
     if (histogram) {
-      eventLoopDelay = Math.max(0, histogram.mean / 1e6 - resolution)
-      if (Number.isNaN(eventLoopDelay)) eventLoopDelay = Number.POSITIVE_INFINITY
-      histogram.reset()
+      eventLoopDelay = Math.max(0, histogram.mean / 1e6 - resolution);
+      if (Number.isNaN(eventLoopDelay))
+        eventLoopDelay = Number.POSITIVE_INFINITY;
+      histogram.reset();
     } else {
-      const toCheck = now()
-      eventLoopDelay = Math.max(0, toCheck - lastCheck - sampleInterval)
-      lastCheck = toCheck
+      const toCheck = now();
+      eventLoopDelay = Math.max(0, toCheck - lastCheck - sampleInterval);
+      lastCheck = toCheck;
     }
   }
 
   function updateEventLoopUtilization() {
     if (elu) {
-      eventLoopUtilized = eventLoopUtilization(elu).utilization
+      eventLoopUtilized = eventLoopUtilization(elu).utilization;
     } else {
-      eventLoopUtilized = 0
+      eventLoopUtilized = 0;
     }
   }
 
   function beginMemoryUsageUpdate() {
-    updateMemoryUsage()
-    timer.refresh()
+    updateMemoryUsage();
+    timer.refresh();
   }
 
   function updateMemoryUsage() {
-    const mem = process.memoryUsage()
-    heapUsed = mem.heapUsed
-    rssBytes = mem.rss
-    updateEventLoopDelay()
-    updateEventLoopUtilization()
+    const mem = process.memoryUsage();
+    heapUsed = mem.heapUsed;
+    rssBytes = mem.rss;
+    updateEventLoopDelay();
+    updateEventLoopUtilization();
   }
 
   function isUnderPressure() {
     if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay) {
-      return true
+      return true;
     }
 
     if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes) {
-      return true
+      return true;
     }
 
     if (checkMaxRssBytes && rssBytes > maxRssBytes) {
-      return true
+      return true;
     }
 
     if (!externalsHealthy) {
-      return true
+      return true;
     }
 
-    if (checkMaxEventLoopUtilization && eventLoopUtilized > maxEventLoopUtilization) {
-      return true
+    if (
+      checkMaxEventLoopUtilization &&
+      eventLoopUtilized > maxEventLoopUtilization
+    ) {
+      return true;
     }
 
-    return false
+    return false;
   }
 
-  function onRequest(req, reply, next) {
-    const _pressureHandler = req.routeOptions.config.pressureHandler || pressureHandler
+  function onRequest(c: Context<E, P, I>, next: Next) {
+    const _pressureHandler =
+      req.routeOptions.config.pressureHandler || pressureHandler;
     if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay) {
-      handlePressure(_pressureHandler, req, reply, next, PressureType.EVENT_LOOP_DELAY, eventLoopDelay)
-      return
+      handlePressure(
+        _pressureHandler,
+        c,
+        next,
+        PressureType.EVENT_LOOP_DELAY,
+        eventLoopDelay
+      );
+      return;
     }
 
     if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes) {
-      handlePressure(_pressureHandler, req, reply, next, PressureType.HEAP_USED_BYTES, heapUsed)
-      return
+      handlePressure(
+        _pressureHandler,
+        c,
+        next,
+        PressureType.HEAP_USED_BYTES,
+        heapUsed
+      );
+      return;
     }
 
     if (checkMaxRssBytes && rssBytes > maxRssBytes) {
-      handlePressure(_pressureHandler, req, reply, next, PressureType.RSS_BYTES, rssBytes)
-      return
+      handlePressure(
+        _pressureHandler,
+        c,
+        next,
+        PressureType.RSS_BYTES,
+        rssBytes
+      );
+      return;
     }
 
     if (!externalsHealthy) {
-      handlePressure(_pressureHandler, req, reply, next, PressureType.HEALTH_CHECK, undefined)
-      return
+      handlePressure(
+        _pressureHandler,
+        c,
+        next,
+        PressureType.HEALTH_CHECK,
+        undefined
+      );
+      return;
     }
 
-    if (checkMaxEventLoopUtilization && eventLoopUtilized > maxEventLoopUtilization) {
-      handlePressure(_pressureHandler, req, reply, next, PressureType.EVENT_LOOP_UTILIZATION, eventLoopUtilized)
-      return
+    if (
+      checkMaxEventLoopUtilization &&
+      eventLoopUtilized > maxEventLoopUtilization
+    ) {
+      handlePressure(
+        _pressureHandler,
+        c,
+        next,
+        PressureType.EVENT_LOOP_UTILIZATION,
+        eventLoopUtilized
+      );
+      return;
     }
 
-    next()
+    next();
   }
 
-  function handlePressure(pressureHandler: PressureType, req, reply, next, type, value) {
-    if (typeof pressureHandler === 'function') {
-      const result = pressureHandler(req, reply, type, value)
+  function handlePressure(
+    pressureHandler: ConfigType<E, P, I>["pressureHandler"],
+    c: Context<E, P, I>,
+    next: Next,
+    type: PressureType,
+    value: number | undefined
+  ) {
+    if (typeof pressureHandler === "function") {
+      const result = pressureHandler(c, type, value);
       if (result instanceof Promise) {
-        result.then(() => next(), next)
+        result.then(() => next(), next);
       } else if (result == null) {
-        next()
+        next();
       } else {
-        reply.send(result)
+        c.body(result);
       }
     } else {
-      reply.status(SERVICE_UNAVAILABLE).header('Retry-After', retryAfter)
-      next(underPressureError)
+      c.status(SERVICE_UNAVAILABLE);
+      c.header("Retry-After", String(retryAfter));
+      next(underPressureError);
     }
   }
 
@@ -278,40 +374,42 @@ export function factoryWithUnderPressure<
       eventLoopDelay,
       rssBytes,
       heapUsed,
-      eventLoopUtilized
-    }
+      eventLoopUtilized,
+    };
   }
 
-  async function onStatus(req, reply) {
-    const okResponse = { status: 'ok' }
+  async function onStatus(c: Context<E, P, I>) {
+    const okResponse = { status: "ok" };
     if (healthCheck) {
       try {
-        const checkResult = await healthCheck(fastify)
+        const checkResult = await healthCheck(c);
         if (!checkResult) {
-          req.log.error('external health check failed')
-          reply.status(SERVICE_UNAVAILABLE).header('Retry-After', retryAfter)
-          throw underPressureError
+          console.error("external health check failed");
+          c.status(SERVICE_UNAVAILABLE);
+          c.header("Retry-After", String(retryAfter));
+          throw underPressureError;
         }
 
-        return Object.assign(okResponse, checkResult)
+        return Object.assign(okResponse, checkResult);
       } catch (err) {
-        req.log.error({ err }, 'external health check failed with error')
-        reply.status(SERVICE_UNAVAILABLE).header('Retry-After', retryAfter)
-        throw underPressureError
+        console.error({ err }, "external health check failed with error");
+        c.status(SERVICE_UNAVAILABLE);
+        c.header("Retry-After", String(retryAfter));
+        throw underPressureError;
       }
     }
 
-    return okResponse
+    return okResponse;
   }
 
-  function onClose(fastify, done) {
-    clearTimeout(timer)
-    clearTimeout(externalHealthCheckTimer)
-    done()
-  }
+  // function onClose(fastify, done) {
+  //   clearTimeout(timer);
+  //   clearTimeout(externalHealthCheckTimer);
+  //   done();
+  // }
 }
 
 function now() {
-  const ts = process.hrtime()
-  return (ts[0] * 1e3) + (ts[1] / 1e6)
+  const ts = process.hrtime();
+  return ts[0] * 1e3 + ts[1] / 1e6;
 }

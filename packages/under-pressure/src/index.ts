@@ -1,2 +1,2 @@
-export * from "./types"
-export { underPressure } from "./core"
+export * from "./types";
+export { underPressure } from "./core";
