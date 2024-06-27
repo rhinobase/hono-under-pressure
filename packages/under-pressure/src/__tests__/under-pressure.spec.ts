@@ -1,4 +1,4 @@
-import { underPressure } from "../";
+import { underPressure } from "../core";
 
 describe("underPressure", () => {
   it("should work", () => {
