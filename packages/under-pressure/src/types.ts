@@ -1,5 +1,6 @@
-import type { Context, Env, Input } from "hono";
+import type { Context, Env, Hono, Input, Schema } from "hono";
 import type { HTTPException } from "hono/http-exception";
+import type { BlankEnv, BlankSchema } from "hono/types";
 
 /**
  * The configuration options for the rate limiter.
@@ -7,7 +8,7 @@ import type { HTTPException } from "hono/http-exception";
 export interface ConfigType<
   E extends Env = Env,
   P extends string = string,
-  I extends Input = Input
+  I extends Input = Input,
 > {
   maxEventLoopDelay?: number;
   maxEventLoopUtilization?: number;
@@ -15,14 +16,18 @@ export interface ConfigType<
   maxRssBytes?: number;
   message?: string;
   retryAfter?: number;
-  healthCheck?: (
-    c: Context<E, P, I>
+  healthCheck?: <
+    E extends Env = BlankEnv,
+    S extends Schema = BlankSchema,
+    BasePath extends string = "/",
+  >(
+    app: Hono<E, S, BasePath>,
   ) => Promise<Record<string, unknown> | boolean>;
   healthCheckInterval?: number;
   pressureHandler?: (
     c: Context<E, P, I>,
     type: PressureType,
-    value: number | undefined
+    value: number | undefined,
   ) => Promise<void> | void;
   sampleInterval?: number;
   exposeStatusRoute?: boolean | string;

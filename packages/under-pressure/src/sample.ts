@@ -1,13 +1,14 @@
-import type { Env, Input } from "hono";
-import { createFactory } from "hono/factory";
-import { HTTPException } from "hono/http-exception";
 import {
-  monitorEventLoopDelay,
-  performance,
   type EventLoopUtilization,
   type IntervalHistogram,
+  monitorEventLoopDelay,
+  performance,
 } from "node:perf_hooks";
-import type { ConfigType } from "./types";
+import type { Context, Env, Input, Next } from "hono";
+import { createFactory } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
+import { type ConfigType, PressureType } from "./types";
+import assert = require("node:assert");
 const eventLoopUtilization = performance.eventLoopUtilization;
 
 const SERVICE_UNAVAILABLE = 503;
@@ -17,11 +18,12 @@ const createError = (message = "Service Unavailable") =>
 export function factoryWithUnderPressure<
   E extends Env = Env,
   P extends string = string,
-  I extends Input = Input
+  I extends Input = Input,
 >(config: ConfigType<E, P, I> = {}) {
   const resolution = 10;
+  const sampleInterval = getSampleInterval(config.sampleInterval, resolution);
+
   const {
-    sampleInterval = getSampleInterval(config.sampleInterval, resolution),
     maxEventLoopDelay = 0,
     maxHeapUsedBytes = 0,
     maxRssBytes = 0,
@@ -29,10 +31,10 @@ export function factoryWithUnderPressure<
     healthCheckInterval = -1,
     maxEventLoopUtilization = 0,
     pressureHandler,
+    retryAfter = 10,
   } = config;
 
   const underPressureError = config.customError || createError(config.message);
-  const retryAfter = config.retryAfter || 10;
 
   const statusRoute = mapExposeStatusRoute(config.exposeStatusRoute);
 
@@ -44,7 +46,7 @@ export function factoryWithUnderPressure<
     : false;
 
   return createFactory({
-    initApp(app) {
+    async initApp(app) {
       let heapUsed = 0;
       let rssBytes = 0;
       let eventLoopDelay = 0;
@@ -75,6 +77,51 @@ export function factoryWithUnderPressure<
         await next();
       });
 
+      const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval);
+      timer.unref();
+
+      let externalsHealthy: Record<string, unknown> | boolean = false;
+      let externalHealthCheckTimer: NodeJS.Timeout;
+      if (healthCheck) {
+        assert(
+          typeof healthCheck === "function",
+          "config.healthCheck should be a function that returns a promise that resolves to true or false",
+        );
+        assert(
+          healthCheckInterval > 0 || statusRoute,
+          "config.healthCheck requires config.healthCheckInterval or config.exposeStatusRoute",
+        );
+
+        const doCheck = async () => {
+          try {
+            externalsHealthy = await healthCheck(app);
+          } catch (error) {
+            externalsHealthy = false;
+            console.error(
+              { error },
+              "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
+            );
+          }
+        };
+
+        await doCheck();
+
+        if (healthCheckInterval > 0) {
+          const beginCheck = async () => {
+            await doCheck();
+            externalHealthCheckTimer.refresh();
+          };
+
+          externalHealthCheckTimer = setTimeout(
+            beginCheck,
+            healthCheckInterval,
+          );
+          externalHealthCheckTimer.unref();
+        }
+      } else {
+        externalsHealthy = true;
+      }
+
       if (statusRoute) {
         app.get(statusRoute, async (c) => {
           const okResponse = { status: "ok" };
@@ -101,6 +148,139 @@ export function factoryWithUnderPressure<
 
           return c.json(okResponse);
         });
+      }
+
+      if (
+        checkMaxEventLoopUtilization === false &&
+        checkMaxEventLoopDelay === false &&
+        checkMaxHeapUsedBytes === false &&
+        checkMaxRssBytes === false &&
+        healthCheck === false
+      ) {
+        return;
+      }
+
+      // TODO: Add the middleware
+      fastify.addHook("onRequest", onRequest);
+
+      function onRequest(c: Context<E, P, I>, next: Next) {
+        const _pressureHandler = config.pressureHandler || pressureHandler;
+        if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay) {
+          handlePressure(
+            _pressureHandler,
+            c,
+            next,
+            PressureType.EVENT_LOOP_DELAY,
+            eventLoopDelay,
+          );
+          return;
+        }
+
+        if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes) {
+          handlePressure(
+            _pressureHandler,
+            c,
+            next,
+            PressureType.HEAP_USED_BYTES,
+            heapUsed,
+          );
+          return;
+        }
+
+        if (checkMaxRssBytes && rssBytes > maxRssBytes) {
+          handlePressure(
+            _pressureHandler,
+            c,
+            next,
+            PressureType.RSS_BYTES,
+            rssBytes,
+          );
+          return;
+        }
+
+        if (!externalsHealthy) {
+          handlePressure(
+            _pressureHandler,
+            c,
+            next,
+            PressureType.HEALTH_CHECK,
+            undefined,
+          );
+          return;
+        }
+
+        if (
+          checkMaxEventLoopUtilization &&
+          eventLoopUtilized > maxEventLoopUtilization
+        ) {
+          handlePressure(
+            _pressureHandler,
+            c,
+            next,
+            PressureType.EVENT_LOOP_UTILIZATION,
+            eventLoopUtilized,
+          );
+          return;
+        }
+
+        next();
+      }
+
+      function handlePressure(
+        pressureHandler: ConfigType<E, P, I>["pressureHandler"],
+        c: Context<E, P, I>,
+        next: Next,
+        type: PressureType,
+        value: number | undefined,
+      ) {
+        if (typeof pressureHandler === "function") {
+          const result = pressureHandler(c, type, value);
+          if (result instanceof Promise) {
+            result.then(() => next(), next);
+          } else if (result == null) {
+            next();
+          } else {
+            c.body(result);
+          }
+        } else {
+          c.status(SERVICE_UNAVAILABLE);
+          c.header("Retry-After", String(retryAfter));
+          next(underPressureError);
+        }
+      }
+
+      function updateEventLoopDelay() {
+        if (histogram) {
+          eventLoopDelay = Math.max(0, histogram.mean / 1e6 - resolution);
+          if (Number.isNaN(eventLoopDelay))
+            eventLoopDelay = Number.POSITIVE_INFINITY;
+          histogram.reset();
+        } else {
+          const toCheck = now();
+          eventLoopDelay = Math.max(0, toCheck - lastCheck - sampleInterval);
+          lastCheck = toCheck;
+        }
+      }
+
+      function updateEventLoopUtilization() {
+        if (elu) {
+          eventLoopUtilized = eventLoopUtilization(elu).utilization;
+        } else {
+          eventLoopUtilized = 0;
+        }
+      }
+
+      function beginMemoryUsageUpdate() {
+        updateMemoryUsage();
+        timer.refresh();
+      }
+
+      function updateMemoryUsage() {
+        const mem = process.memoryUsage();
+        heapUsed = mem.heapUsed;
+        rssBytes = mem.rss;
+        updateEventLoopDelay();
+        updateEventLoopUtilization();
       }
 
       function isUnderPressure() {
@@ -144,7 +324,7 @@ export function factoryWithUnderPressure<
 
 function getSampleInterval(
   value: number | undefined,
-  eventLoopResolution: number
+  eventLoopResolution: number,
 ) {
   const defaultValue = monitorEventLoopDelay ? 1000 : 5;
   const sampleInterval = value || defaultValue;
