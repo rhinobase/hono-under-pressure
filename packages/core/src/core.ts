@@ -20,6 +20,12 @@ const SERVICE_UNAVAILABLE = 503;
 const eventLoopUtilization: EventLoopUtilityFunction | undefined =
   performance.eventLoopUtilization;
 
+/**
+ * Setup the underPressure plugin.
+ *
+ * @param handler - Receives an array of middlewares and returns a server instance.
+ * @param config - Configuration options for the underPressure plugin.
+ */
 export function underPressure<
   E extends { Variables: UnderPressureVariables },
   P extends string = string,
@@ -199,6 +205,11 @@ export function underPressure<
     }
   }
 
+  /**
+   * Checks if the system is under pressure based on the configured thresholds.
+   *
+   * @returns {boolean} True if the system is under pressure, false otherwise.
+   */
   function isUnderPressure() {
     if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay) {
       return true;
@@ -226,6 +237,11 @@ export function underPressure<
     return false;
   }
 
+  /**
+   * Returns the current memory usage statistics.
+   *
+   * @returns {object} An object containing memory usage statistics.
+   */
   function memoryUsage() {
     return {
       eventLoopDelay,
@@ -235,6 +251,9 @@ export function underPressure<
     };
   }
 
+  /**
+   * Cleans up resources when the server is closed.
+   */
   function onClose() {
     clearTimeout(timer);
     clearTimeout(externalHealthCheckTimer);

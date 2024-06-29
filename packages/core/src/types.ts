@@ -1,5 +1,8 @@
 import type { Context, Input } from "hono";
 
+/**
+ * Variables added in the Hono context by using this plugin.
+ */
 export type UnderPressureVariables = {
   memoryUsage: () => {
     eventLoopDelay: number;
@@ -20,7 +23,7 @@ export type UnderPressureVariables = {
 };
 
 /**
- * The configuration options for the rate limiter.
+ * The configuration options for the under pressure plugin.
  */
 export interface ConfigType<
   E extends { Variables: UnderPressureVariables },
@@ -43,6 +46,9 @@ export interface ConfigType<
   ) => Promise<void> | void;
 }
 
+/**
+ * Enum of pressure types.
+ */
 export enum PressureType {
   EVENT_LOOP_DELAY = "eventLoopDelay",
   HEAP_USED_BYTES = "heapUsedBytes",
