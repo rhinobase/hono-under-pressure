@@ -8,6 +8,15 @@ export type UnderPressureVariables = {
     eventLoopUtilized: number;
   };
   isUnderPressure: () => boolean;
+  pressureHandler?: <
+    E extends { Variables: UnderPressureVariables },
+    P extends string = string,
+    I extends Input = Input,
+  >(
+    c: Context<E, P, I>,
+    type: PressureType,
+    value?: number,
+  ) => Promise<void> | void;
 };
 
 /**
@@ -22,10 +31,12 @@ export interface ConfigType<
   maxEventLoopUtilization?: number;
   maxHeapUsedBytes?: number;
   maxRssBytes?: number;
-  healthCheck?: () => Promise<Record<string, unknown> | boolean>;
+  healthCheck?: (
+    c: Context<E, P, I>,
+  ) => Promise<Record<string, unknown> | boolean>;
   healthCheckInterval?: number;
   sampleInterval?: number;
-  pressureHandler: (
+  pressureHandler?: (
     c: Context<E, P, I>,
     type: PressureType,
     value?: number,

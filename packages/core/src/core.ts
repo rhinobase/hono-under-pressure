@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import {
+  type EventLoopUtilityFunction,
   type EventLoopUtilization,
   type IntervalHistogram,
   monitorEventLoopDelay,
@@ -8,13 +9,16 @@ import {
 import type { ServerType } from "@hono/node-server";
 import type { Input, MiddlewareHandler } from "hono";
 import { createMiddleware } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
 import {
   type ConfigType,
   PressureType,
   type UnderPressureVariables,
 } from "./types";
 
-const eventLoopUtilization = performance.eventLoopUtilization;
+const SERVICE_UNAVAILABLE = 503;
+const eventLoopUtilization: EventLoopUtilityFunction | undefined =
+  performance.eventLoopUtilization;
 
 export function underPressure<
   E extends { Variables: UnderPressureVariables },
@@ -34,13 +38,19 @@ export function underPressure<
     healthCheck = false,
     healthCheckInterval = -1,
     maxEventLoopUtilization = 0,
-    pressureHandler,
+    pressureHandler = () => {
+      throw new HTTPException(SERVICE_UNAVAILABLE, {
+        message: "Service Unavailable",
+      });
+    },
   } = config;
 
   const checkMaxEventLoopDelay = maxEventLoopDelay > 0;
   const checkMaxHeapUsedBytes = maxHeapUsedBytes > 0;
   const checkMaxRssBytes = maxRssBytes > 0;
-  const checkMaxEventLoopUtilization = maxEventLoopUtilization > 0;
+  const checkMaxEventLoopUtilization = eventLoopUtilization
+    ? maxEventLoopUtilization > 0
+    : false;
 
   let heapUsed = 0;
   let rssBytes = 0;
@@ -64,6 +74,44 @@ export function underPressure<
   const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval);
   timer.unref();
 
+  const handlers = [
+    createMiddleware<E, P, I>(async (c, next) => {
+      c.set("memoryUsage", memoryUsage);
+      c.set("isUnderPressure", isUnderPressure);
+      await next();
+    }),
+    createMiddleware<E, P, I>(async (c, next) => {
+      const _pressureHandler = c.get("pressureHandler") || pressureHandler;
+      if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay)
+        await _pressureHandler(
+          c,
+          PressureType.EVENT_LOOP_DELAY,
+          eventLoopDelay,
+        );
+
+      if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes)
+        await _pressureHandler(c, PressureType.HEAP_USED_BYTES, heapUsed);
+
+      if (checkMaxRssBytes && rssBytes > maxRssBytes)
+        await _pressureHandler(c, PressureType.RSS_BYTES, rssBytes);
+
+      if (!externalsHealthy)
+        await _pressureHandler(c, PressureType.HEALTH_CHECK);
+
+      if (
+        checkMaxEventLoopUtilization &&
+        eventLoopUtilized > maxEventLoopUtilization
+      )
+        await _pressureHandler(
+          c,
+          PressureType.EVENT_LOOP_UTILIZATION,
+          eventLoopUtilized,
+        );
+
+      await next();
+    }),
+  ];
+
   let externalsHealthy: Record<string, unknown> | boolean = false;
   let externalHealthCheckTimer: NodeJS.Timeout;
   if (healthCheck) {
@@ -76,67 +124,45 @@ export function underPressure<
       "config.healthCheck requires config.healthCheckInterval",
     );
 
-    const doCheck = async () => {
-      try {
-        externalsHealthy = await healthCheck();
-      } catch (error) {
-        externalsHealthy = false;
-        console.error(
-          { error },
-          "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
-        );
-      }
-    };
-
-    doCheck().then(() => {
-      if (healthCheckInterval > 0) {
-        const beginCheck = async () => {
-          await doCheck();
-          externalHealthCheckTimer.refresh();
+    const externalHealthHandler = createMiddleware<E, P, I>(async (c, next) => {
+      if (externalHealthCheckTimer == null) {
+        const doCheck = async () => {
+          try {
+            externalsHealthy = await healthCheck(c);
+          } catch (error) {
+            externalsHealthy = false;
+            console.error(
+              { error },
+              "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
+            );
+          }
         };
 
-        externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval);
-        externalHealthCheckTimer.unref();
+        await doCheck();
+
+        if (healthCheckInterval > 0) {
+          const beginCheck = async () => {
+            await doCheck();
+            externalHealthCheckTimer.refresh();
+          };
+
+          externalHealthCheckTimer = setTimeout(
+            beginCheck,
+            healthCheckInterval,
+          );
+          externalHealthCheckTimer.unref();
+        }
       }
+
+      await next();
     });
+
+    handlers.splice(1, 0, externalHealthHandler);
   } else {
     externalsHealthy = true;
   }
 
-  const middlewares = [
-    createMiddleware<E, P, I>(async (c, next) => {
-      c.set("memoryUsage", memoryUsage);
-      c.set("isUnderPressure", isUnderPressure);
-      await next();
-    }),
-    createMiddleware<E, P, I>(async (c, next) => {
-      if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay)
-        await pressureHandler(c, PressureType.EVENT_LOOP_DELAY, eventLoopDelay);
-
-      if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes)
-        await pressureHandler(c, PressureType.HEAP_USED_BYTES, heapUsed);
-
-      if (checkMaxRssBytes && rssBytes > maxRssBytes)
-        await pressureHandler(c, PressureType.RSS_BYTES, rssBytes);
-
-      if (!externalsHealthy)
-        await pressureHandler(c, PressureType.HEALTH_CHECK);
-
-      if (
-        checkMaxEventLoopUtilization &&
-        eventLoopUtilized > maxEventLoopUtilization
-      )
-        await pressureHandler(
-          c,
-          PressureType.EVENT_LOOP_UTILIZATION,
-          eventLoopUtilized,
-        );
-
-      await next();
-    }),
-  ];
-
-  const server = handler(middlewares);
+  const server = handler(handlers);
   server.on("close", onClose);
 
   function beginMemoryUsageUpdate() {
@@ -166,7 +192,7 @@ export function underPressure<
   }
 
   function updateEventLoopUtilization() {
-    if (elu) {
+    if (elu && eventLoopUtilization) {
       eventLoopUtilized = eventLoopUtilization(elu).utilization;
     } else {
       eventLoopUtilized = 0;
