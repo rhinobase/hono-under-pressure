@@ -205,6 +205,15 @@ In fact, it is known that `setInterval` will call repeatedly at the scheduled ti
 
 One note to consider is that because the two methods are not identical, the timer function is not guaranteed to run at exactly the same rate when the system is under pressure or running a long-running process.
 
+<a name="articles"></a>
+
+#### Articles
+
+These can help you understand how it can improve your Hono Nodejs server performance -
+
+- <https://nodesource.com/blog/event-loop-utilization-nodejs/>
+- <https://blog.platformatic.dev/the-nodejs-event-loop>
+
 ## Contributing
 
 We would love to have more contributors involved!
