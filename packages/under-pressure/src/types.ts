@@ -1,12 +1,20 @@
-import type { Context, Env, Hono, Input, Schema } from "hono";
-import type { HTTPException } from "hono/http-exception";
-import type { BlankEnv, BlankSchema } from "hono/types";
+import type { Context, Input } from "hono";
+
+export type UnderPressureVariables = {
+  memoryUsage: () => {
+    eventLoopDelay: number;
+    rssBytes: number;
+    heapUsed: number;
+    eventLoopUtilized: number;
+  };
+  isUnderPressure: () => boolean;
+};
 
 /**
  * The configuration options for the rate limiter.
  */
 export interface ConfigType<
-  E extends Env = Env,
+  E extends { Variables: UnderPressureVariables },
   P extends string = string,
   I extends Input = Input,
 > {
@@ -14,24 +22,14 @@ export interface ConfigType<
   maxEventLoopUtilization?: number;
   maxHeapUsedBytes?: number;
   maxRssBytes?: number;
-  message?: string;
-  retryAfter?: number;
-  healthCheck?: <
-    E extends Env = BlankEnv,
-    S extends Schema = BlankSchema,
-    BasePath extends string = "/",
-  >(
-    app: Hono<E, S, BasePath>,
-  ) => Promise<Record<string, unknown> | boolean>;
+  healthCheck?: () => Promise<Record<string, unknown> | boolean>;
   healthCheckInterval?: number;
-  pressureHandler?: (
+  sampleInterval?: number;
+  pressureHandler: (
     c: Context<E, P, I>,
     type: PressureType,
-    value: number | undefined,
+    value?: number,
   ) => Promise<void> | void;
-  sampleInterval?: number;
-  exposeStatusRoute?: boolean | string;
-  customError?: HTTPException;
 }
 
 export enum PressureType {

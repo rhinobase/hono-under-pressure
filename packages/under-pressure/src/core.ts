@@ -5,45 +5,19 @@ import {
   performance,
 } from "node:perf_hooks";
 import type { ServerType } from "@hono/node-server";
-
-import assert = require("node:assert");
-import type { Context, Input, MiddlewareHandler } from "hono";
+import type { Input, MiddlewareHandler } from "hono";
 import { createMiddleware } from "hono/factory";
-import { PressureType } from "./types";
+import {
+  type ConfigType,
+  PressureType,
+  type UnderPressureVariables,
+} from "./types";
+import assert = require("node:assert");
 
 const eventLoopUtilization = performance.eventLoopUtilization;
 
-type Variables = {
-  memoryUsage: () => {
-    eventLoopDelay: number;
-    rssBytes: number;
-    heapUsed: number;
-    eventLoopUtilized: number;
-  };
-  isUnderPressure: () => boolean;
-};
-
-export interface ConfigType<
-  E extends { Variables: Variables },
-  P extends string = string,
-  I extends Input = Input,
-> {
-  maxEventLoopDelay?: number;
-  maxEventLoopUtilization?: number;
-  maxHeapUsedBytes?: number;
-  maxRssBytes?: number;
-  healthCheck?: () => Promise<Record<string, unknown> | boolean>;
-  healthCheckInterval?: number;
-  sampleInterval?: number;
-  pressureHandler: (
-    c: Context<E, P, I>,
-    type: PressureType,
-    value?: number,
-  ) => Promise<void> | void;
-}
-
-export async function underPressure<
-  E extends { Variables: Variables },
+export function underPressure<
+  E extends { Variables: UnderPressureVariables },
   P extends string = string,
   I extends Input = Input,
 >(
@@ -116,17 +90,17 @@ export async function underPressure<
       }
     };
 
-    await doCheck();
+    doCheck().then(() => {
+      if (healthCheckInterval > 0) {
+        const beginCheck = async () => {
+          await doCheck();
+          externalHealthCheckTimer.refresh();
+        };
 
-    if (healthCheckInterval > 0) {
-      const beginCheck = async () => {
-        await doCheck();
-        externalHealthCheckTimer.refresh();
-      };
-
-      externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval);
-      externalHealthCheckTimer.unref();
-    }
+        externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval);
+        externalHealthCheckTimer.unref();
+      }
+    });
   } else {
     externalsHealthy = true;
   }
