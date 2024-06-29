@@ -1,39 +1,59 @@
-import type { Context, Env, Input, Next } from "hono";
-import { createFactory } from "hono/factory";
-import { HTTPException } from "hono/http-exception";
-import { type ConfigType, PressureType } from "./types";
-import assert = require("node:assert");
 import {
   type EventLoopUtilization,
   type IntervalHistogram,
   monitorEventLoopDelay,
   performance,
 } from "node:perf_hooks";
+import type { ServerType } from "@hono/node-server";
+
+import assert = require("node:assert");
+import type { Context, Input, MiddlewareHandler } from "hono";
+import { createMiddleware } from "hono/factory";
+import { PressureType } from "./types";
+
 const eventLoopUtilization = performance.eventLoopUtilization;
 
-const SERVICE_UNAVAILABLE = 503;
-const createError = (message = "Service Unavailable") =>
-  new HTTPException(SERVICE_UNAVAILABLE, { message });
+type Variables = {
+  memoryUsage: () => {
+    eventLoopDelay: number;
+    rssBytes: number;
+    heapUsed: number;
+    eventLoopUtilized: number;
+  };
+  isUnderPressure: () => boolean;
+};
 
-function getSampleInterval(
-  value: number | undefined,
-  eventLoopResolution: number
-) {
-  const defaultValue = monitorEventLoopDelay ? 1000 : 5;
-  const sampleInterval = value || defaultValue;
-  return monitorEventLoopDelay
-    ? Math.max(eventLoopResolution, sampleInterval)
-    : sampleInterval;
+export interface ConfigType<
+  E extends { Variables: Variables },
+  P extends string = string,
+  I extends Input = Input,
+> {
+  maxEventLoopDelay?: number;
+  maxEventLoopUtilization?: number;
+  maxHeapUsedBytes?: number;
+  maxRssBytes?: number;
+  healthCheck?: () => Promise<Record<string, unknown> | boolean>;
+  healthCheckInterval?: number;
+  sampleInterval?: number;
+  pressureHandler: (
+    c: Context<E, P, I>,
+    type: PressureType,
+    value?: number,
+  ) => Promise<void> | void;
 }
 
-export function factoryWithUnderPressure<
-  E extends Env = Env,
+export async function underPressure<
+  E extends { Variables: Variables },
   P extends string = string,
-  I extends Input = Input
->(config: ConfigType<E, P, I> = {}) {
+  I extends Input = Input,
+>(
+  handler: (middleware: MiddlewareHandler<E, P, I>[]) => ServerType,
+  config: ConfigType<E, P, I>,
+) {
   const resolution = 10;
+  const sampleInterval = getSampleInterval(config.sampleInterval, resolution);
+
   const {
-    sampleInterval = getSampleInterval(config.sampleInterval, resolution),
     maxEventLoopDelay = 0,
     maxHeapUsedBytes = 0,
     maxRssBytes = 0,
@@ -42,8 +62,6 @@ export function factoryWithUnderPressure<
     maxEventLoopUtilization = 0,
     pressureHandler,
   } = config;
-
-  const UnderPressureError = config.customError || createError(config.message);
 
   const checkMaxEventLoopDelay = maxEventLoopDelay > 0;
   const checkMaxHeapUsedBytes = maxHeapUsedBytes > 0;
@@ -71,40 +89,29 @@ export function factoryWithUnderPressure<
     elu = eventLoopUtilization();
   }
 
-  // TODO: Add create factory function
-
-  createFactory({
-    initApp: (app) => {
-      app.on();
-    },
-  });
-
-  fastify.decorate("memoryUsage", memoryUsage);
-  fastify.decorate("isUnderPressure", isUnderPressure);
-
   const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval);
   timer.unref();
 
-  let externalsHealthy = false;
-  let externalHealthCheckTimer;
+  let externalsHealthy: Record<string, unknown> | boolean = false;
+  let externalHealthCheckTimer: NodeJS.Timeout;
   if (healthCheck) {
     assert(
       typeof healthCheck === "function",
-      "config.healthCheck should be a function that returns a promise that resolves to true or false"
+      "config.healthCheck should be a function that returns a promise that resolves to true or false",
     );
     assert(
-      healthCheckInterval > 0 || config.exposeStatusRoute,
-      "config.healthCheck requires config.healthCheckInterval or config.exposeStatusRoute"
+      healthCheckInterval > 0,
+      "config.healthCheck requires config.healthCheckInterval",
     );
 
     const doCheck = async () => {
       try {
-        externalsHealthy = await healthCheck(fastify);
+        externalsHealthy = await healthCheck();
       } catch (error) {
         externalsHealthy = false;
-        fastify.log.error(
+        console.error(
           { error },
-          "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy."
+          "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
         );
       }
     };
@@ -124,101 +131,53 @@ export function factoryWithUnderPressure<
     externalsHealthy = true;
   }
 
-  fastify.addHook("onClose", onClose);
+  const middlewares = [
+    createMiddleware<E, P, I>(async (c, next) => {
+      c.set("memoryUsage", memoryUsage);
+      c.set("isUnderPressure", isUnderPressure);
+      await next();
+    }),
+    createMiddleware<E, P, I>(async (c, next) => {
+      if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay)
+        await pressureHandler(c, PressureType.EVENT_LOOP_DELAY, eventLoopDelay);
 
-  config.exposeStatusRoute = mapExposeStatusRoute(config.exposeStatusRoute);
+      if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes)
+        await pressureHandler(c, PressureType.HEAP_USED_BYTES, heapUsed);
 
-  if (config.exposeStatusRoute) {
-    fastify.route({
-      ...config.exposeStatusRoute.routeOpts,
-      url: config.exposeStatusRoute.url,
-      method: "GET",
-      schema: Object.assign({}, config.exposeStatusRoute.routeSchemaOpts, {
-        response: {
-          200: {
-            type: "object",
-            description: "Health Check Succeeded",
-            properties: Object.assign(
-              { status: { type: "string" } },
-              config.exposeStatusRoute.routeResponseSchemaOpts
-            ),
-            example: {
-              status: "ok",
-            },
-          },
-          500: {
-            type: "object",
-            description: "Error Performing Health Check",
-            properties: {
-              message: {
-                type: "string",
-                description: "Error message for failure during health check",
-                example: "Internal Server Error",
-              },
-              statusCode: {
-                type: "number",
-                description:
-                  "Code representing the error. Always matches the HTTP response code.",
-                example: 500,
-              },
-            },
-          },
-          503: {
-            type: "object",
-            description: "Health Check Failed",
-            properties: {
-              code: {
-                type: "string",
-                description: "Error code associated with the failing check",
-                example: "FST_UNDER_PRESSURE",
-              },
-              error: {
-                type: "string",
-                description: "Error thrown during health check",
-                example: "Service Unavailable",
-              },
-              message: {
-                type: "string",
-                description: "Error message to explain health check failure",
-                example: "Service Unavailable",
-              },
-              statusCode: {
-                type: "number",
-                description:
-                  "Code representing the error. Always matches the HTTP response code.",
-                example: 503,
-              },
-            },
-          },
-        },
-      }),
-      handler: onStatus,
-    });
+      if (checkMaxRssBytes && rssBytes > maxRssBytes)
+        await pressureHandler(c, PressureType.RSS_BYTES, rssBytes);
+
+      if (!externalsHealthy)
+        await pressureHandler(c, PressureType.HEALTH_CHECK);
+
+      if (
+        checkMaxEventLoopUtilization &&
+        eventLoopUtilized > maxEventLoopUtilization
+      )
+        await pressureHandler(
+          c,
+          PressureType.EVENT_LOOP_UTILIZATION,
+          eventLoopUtilized,
+        );
+
+      await next();
+    }),
+  ];
+
+  const server = handler(middlewares);
+  server.on("close", onClose);
+
+  function beginMemoryUsageUpdate() {
+    updateMemoryUsage();
+    timer.refresh();
   }
 
-  if (
-    checkMaxEventLoopUtilization === false &&
-    checkMaxEventLoopDelay === false &&
-    checkMaxHeapUsedBytes === false &&
-    checkMaxRssBytes === false &&
-    healthCheck === false
-  ) {
-    return;
-  }
-
-  const underPressureError = new UnderPressureError();
-  const retryAfter = config.retryAfter || 10;
-
-  fastify.addHook("onRequest", onRequest);
-
-  function mapExposeStatusRoute(opts?: string | { url: string }) {
-    if (!opts) {
-      return false;
-    }
-    if (typeof opts === "string") {
-      return { url: opts };
-    }
-    return Object.assign({ url: "/status" }, opts);
+  function updateMemoryUsage() {
+    const mem = process.memoryUsage();
+    heapUsed = mem.heapUsed;
+    rssBytes = mem.rss;
+    updateEventLoopDelay();
+    updateEventLoopUtilization();
   }
 
   function updateEventLoopDelay() {
@@ -240,19 +199,6 @@ export function factoryWithUnderPressure<
     } else {
       eventLoopUtilized = 0;
     }
-  }
-
-  function beginMemoryUsageUpdate() {
-    updateMemoryUsage();
-    timer.refresh();
-  }
-
-  function updateMemoryUsage() {
-    const mem = process.memoryUsage();
-    heapUsed = mem.heapUsed;
-    rssBytes = mem.rss;
-    updateEventLoopDelay();
-    updateEventLoopUtilization();
   }
 
   function isUnderPressure() {
@@ -282,93 +228,6 @@ export function factoryWithUnderPressure<
     return false;
   }
 
-  function onRequest(c: Context<E, P, I>, next: Next) {
-    const _pressureHandler =
-      req.routeOptions.config.pressureHandler || pressureHandler;
-    if (checkMaxEventLoopDelay && eventLoopDelay > maxEventLoopDelay) {
-      handlePressure(
-        _pressureHandler,
-        c,
-        next,
-        PressureType.EVENT_LOOP_DELAY,
-        eventLoopDelay
-      );
-      return;
-    }
-
-    if (checkMaxHeapUsedBytes && heapUsed > maxHeapUsedBytes) {
-      handlePressure(
-        _pressureHandler,
-        c,
-        next,
-        PressureType.HEAP_USED_BYTES,
-        heapUsed
-      );
-      return;
-    }
-
-    if (checkMaxRssBytes && rssBytes > maxRssBytes) {
-      handlePressure(
-        _pressureHandler,
-        c,
-        next,
-        PressureType.RSS_BYTES,
-        rssBytes
-      );
-      return;
-    }
-
-    if (!externalsHealthy) {
-      handlePressure(
-        _pressureHandler,
-        c,
-        next,
-        PressureType.HEALTH_CHECK,
-        undefined
-      );
-      return;
-    }
-
-    if (
-      checkMaxEventLoopUtilization &&
-      eventLoopUtilized > maxEventLoopUtilization
-    ) {
-      handlePressure(
-        _pressureHandler,
-        c,
-        next,
-        PressureType.EVENT_LOOP_UTILIZATION,
-        eventLoopUtilized
-      );
-      return;
-    }
-
-    next();
-  }
-
-  function handlePressure(
-    pressureHandler: ConfigType<E, P, I>["pressureHandler"],
-    c: Context<E, P, I>,
-    next: Next,
-    type: PressureType,
-    value: number | undefined
-  ) {
-    if (typeof pressureHandler === "function") {
-      const result = pressureHandler(c, type, value);
-      if (result instanceof Promise) {
-        result.then(() => next(), next);
-      } else if (result == null) {
-        next();
-      } else {
-        c.body(result);
-      }
-    } else {
-      c.status(SERVICE_UNAVAILABLE);
-      c.header("Retry-After", String(retryAfter));
-      next(underPressureError);
-    }
-  }
-
   function memoryUsage() {
     return {
       eventLoopDelay,
@@ -378,35 +237,23 @@ export function factoryWithUnderPressure<
     };
   }
 
-  async function onStatus(c: Context<E, P, I>) {
-    const okResponse = { status: "ok" };
-    if (healthCheck) {
-      try {
-        const checkResult = await healthCheck(c);
-        if (!checkResult) {
-          console.error("external health check failed");
-          c.status(SERVICE_UNAVAILABLE);
-          c.header("Retry-After", String(retryAfter));
-          throw underPressureError;
-        }
-
-        return Object.assign(okResponse, checkResult);
-      } catch (err) {
-        console.error({ err }, "external health check failed with error");
-        c.status(SERVICE_UNAVAILABLE);
-        c.header("Retry-After", String(retryAfter));
-        throw underPressureError;
-      }
-    }
-
-    return okResponse;
+  function onClose() {
+    clearTimeout(timer);
+    clearTimeout(externalHealthCheckTimer);
   }
 
-  // function onClose(fastify, done) {
-  //   clearTimeout(timer);
-  //   clearTimeout(externalHealthCheckTimer);
-  //   done();
-  // }
+  return server;
+}
+
+function getSampleInterval(
+  value: number | undefined,
+  eventLoopResolution: number,
+) {
+  const defaultValue = monitorEventLoopDelay ? 1000 : 5;
+  const sampleInterval = value || defaultValue;
+  return monitorEventLoopDelay
+    ? Math.max(eventLoopResolution, sampleInterval)
+    : sampleInterval;
 }
 
 function now() {

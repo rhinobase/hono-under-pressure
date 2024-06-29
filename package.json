@@ -39,6 +39,7 @@
     "includedScripts": []
   },
   "dependencies": {
+    "@hono/node-server": "^1.11.4",
     "hono": "^4.4.8"
   }
 }
