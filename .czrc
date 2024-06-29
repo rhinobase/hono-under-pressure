@@ -1,8 +1,8 @@
 {
   "scopes": [
     {
-      "value": "undpre",
-      "name": "undpre:                  anything Under Pressure specific"
+      "value": "core",
+      "name": "core:                  anything core specific"
     }
   ],
   "scopesSearchValue": true,

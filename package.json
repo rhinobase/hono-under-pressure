@@ -1,5 +1,5 @@
 {
-  "name": "honohub",
+  "name": "under-pressure",
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
@@ -14,6 +14,7 @@
     "@nx/rollup": "19.2.2",
     "@nx/vite": "19.2.2",
     "@nx/web": "19.2.2",
+    "@rollup/plugin-terser": "^0.4.4",
     "@swc-node/register": "~1.9.1",
     "@swc/cli": "~0.3.12",
     "@swc/core": "~1.5.7",
@@ -26,7 +27,6 @@
     "is-ci": "^3.0.1",
     "lint-staged": "^15.2.5",
     "nx": "19.2.2",
-    "prettier": "^2.6.2",
     "rollup": "^4.14.0",
     "swc-loader": "0.1.15",
     "tslib": "^2.6.3",

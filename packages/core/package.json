@@ -1,0 +1,32 @@
+{
+  "name": "hono-under-pressure",
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": [
+    "hono",
+    "api",
+    "middleware",
+    "node",
+    "under-pressure",
+    "performance",
+    "honojs",
+    "nodejs"
+  ],
+  "homepage": "https://github.com/rhinobase/hono-under-pressure#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rhinobase/hono-under-pressure.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/rhinobase/hono-under-pressure/issues"
+  },
+  "peerDependencies": {
+    "@hono/node-server": "1.11.4",
+    "hono": "^4.1.1"
+  },
+  "types": "./index.cjs.d.ts"
+}

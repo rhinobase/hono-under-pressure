@@ -1,3 +1,4 @@
+import { strict as assert } from "node:assert";
 import {
   type EventLoopUtilization,
   type IntervalHistogram,
@@ -12,7 +13,6 @@ import {
   PressureType,
   type UnderPressureVariables,
 } from "./types";
-import assert = require("node:assert");
 
 const eventLoopUtilization = performance.eventLoopUtilization;
 
@@ -40,9 +40,7 @@ export function underPressure<
   const checkMaxEventLoopDelay = maxEventLoopDelay > 0;
   const checkMaxHeapUsedBytes = maxHeapUsedBytes > 0;
   const checkMaxRssBytes = maxRssBytes > 0;
-  const checkMaxEventLoopUtilization = eventLoopUtilization
-    ? maxEventLoopUtilization > 0
-    : false;
+  const checkMaxEventLoopUtilization = maxEventLoopUtilization > 0;
 
   let heapUsed = 0;
   let rssBytes = 0;
@@ -223,11 +221,9 @@ function getSampleInterval(
   value: number | undefined,
   eventLoopResolution: number,
 ) {
-  const defaultValue = monitorEventLoopDelay ? 1000 : 5;
+  const defaultValue = 1000;
   const sampleInterval = value || defaultValue;
-  return monitorEventLoopDelay
-    ? Math.max(eventLoopResolution, sampleInterval)
-    : sampleInterval;
+  return Math.max(eventLoopResolution, sampleInterval);
 }
 
 function now() {
