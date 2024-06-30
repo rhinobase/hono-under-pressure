@@ -32,7 +32,7 @@ export function underPressure<
   I extends Input = Input,
 >(
   handler: (middleware: MiddlewareHandler<E, P, I>[]) => ServerType,
-  config: ConfigType<E, P, I>,
+  config: ConfigType<E, P, I> = {},
 ) {
   const resolution = 10;
   const sampleInterval = getSampleInterval(config.sampleInterval, resolution);
@@ -80,6 +80,45 @@ export function underPressure<
   const timer = setTimeout(beginMemoryUsageUpdate, sampleInterval);
   timer.unref();
 
+  let externalsHealthy: Record<string, unknown> | boolean = false;
+  let externalHealthCheckTimer: NodeJS.Timeout;
+  if (healthCheck) {
+    assert(
+      typeof healthCheck === "function",
+      "config.healthCheck should be a function that returns a promise that resolves to true or false",
+    );
+    assert(
+      healthCheckInterval > 0,
+      "config.healthCheck requires config.healthCheckInterval",
+    );
+
+    const doCheck = async () => {
+      try {
+        externalsHealthy = await healthCheck();
+      } catch (error) {
+        externalsHealthy = false;
+        console.error(
+          { error },
+          "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
+        );
+      }
+    };
+
+    doCheck();
+
+    if (healthCheckInterval > 0) {
+      const beginCheck = async () => {
+        await doCheck();
+        externalHealthCheckTimer.refresh();
+      };
+
+      externalHealthCheckTimer = setTimeout(beginCheck, healthCheckInterval);
+      externalHealthCheckTimer.unref();
+    }
+  } else {
+    externalsHealthy = true;
+  }
+
   const handlers = [
     createMiddleware<E, P, I>(async (c, next) => {
       c.set("memoryUsage", memoryUsage);
@@ -117,56 +156,6 @@ export function underPressure<
       await next();
     }),
   ];
-
-  let externalsHealthy: Record<string, unknown> | boolean = false;
-  let externalHealthCheckTimer: NodeJS.Timeout;
-  if (healthCheck) {
-    assert(
-      typeof healthCheck === "function",
-      "config.healthCheck should be a function that returns a promise that resolves to true or false",
-    );
-    assert(
-      healthCheckInterval > 0,
-      "config.healthCheck requires config.healthCheckInterval",
-    );
-
-    const externalHealthHandler = createMiddleware<E, P, I>(async (c, next) => {
-      if (externalHealthCheckTimer == null) {
-        const doCheck = async () => {
-          try {
-            externalsHealthy = await healthCheck(c);
-          } catch (error) {
-            externalsHealthy = false;
-            console.error(
-              { error },
-              "external healthCheck function supplied to `under-pressure` threw an error. setting the service status to unhealthy.",
-            );
-          }
-        };
-
-        await doCheck();
-
-        if (healthCheckInterval > 0) {
-          const beginCheck = async () => {
-            await doCheck();
-            externalHealthCheckTimer.refresh();
-          };
-
-          externalHealthCheckTimer = setTimeout(
-            beginCheck,
-            healthCheckInterval,
-          );
-          externalHealthCheckTimer.unref();
-        }
-      }
-
-      await next();
-    });
-
-    handlers.splice(1, 0, externalHealthHandler);
-  } else {
-    externalsHealthy = true;
-  }
 
   const server = handler(handlers);
   server.on("close", onClose);

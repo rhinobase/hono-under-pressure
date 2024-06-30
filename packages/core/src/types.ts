@@ -34,9 +34,7 @@ export interface ConfigType<
   maxEventLoopUtilization?: number;
   maxHeapUsedBytes?: number;
   maxRssBytes?: number;
-  healthCheck?: (
-    c: Context<E, P, I>,
-  ) => Promise<Record<string, unknown> | boolean>;
+  healthCheck?: () => Promise<Record<string, unknown> | boolean>;
   healthCheckInterval?: number;
   sampleInterval?: number;
   pressureHandler?: (

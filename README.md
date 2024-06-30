@@ -45,8 +45,9 @@ app.get("/", (c) => {
 
 underPressure(
   (handlers) => {
-    app.use(...handlers);
-    return serve(app);
+    const newApp = Hono().use(...handlers);
+    newApp.route("/", app);
+    return serve(newApp);
   },
   {
     maxEventLoopDelay: 1000,
@@ -117,7 +118,7 @@ underPressure(createServer, {
 });
 ```
 
-If you don't throw an Error, the request will be handled normally.
+If you don't throw a HTTPException, the request will be handled normally.
 
 It's also possible to specify the `pressureHandler` on the route:
 
@@ -146,8 +147,9 @@ app.get("/", (c) => {
 
 underPressure(
   (handlers) => {
-    app.use(...handlers);
-    return serve(app);
+    const newApp = Hono().use(...handlers);
+    newApp.route("/", app);
+    return serve(newApp);
   },
   {
     maxHeapUsedBytes: 100000000,
@@ -166,7 +168,7 @@ By default when this function is supplied your service health is considered unhe
 
 ```js
 underPressure(createServer, {
-  healthCheck: async function (c) {
+  healthCheck: async function () {
     // do some magic to check if your db connection is healthy, etc...
     return true;
   },
