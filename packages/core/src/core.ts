@@ -21,7 +21,7 @@ const eventLoopUtilization: EventLoopUtilityFunction | undefined =
   performance.eventLoopUtilization;
 
 /**
- * Setup the underPressure plugin.
+ * Measure process load with automatic handling of "Service Unavailable" plugin.
  *
  * @param handler - Receives an array of middlewares and returns a server instance.
  * @param config - Configuration options for the underPressure plugin.

@@ -11,6 +11,7 @@
   },
   "formatter": {
     "indentStyle": "space",
+    "indentWidth": 2,
     "lineEnding": "crlf"
   },
   "vcs": {

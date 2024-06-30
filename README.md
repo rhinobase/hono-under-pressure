@@ -45,7 +45,7 @@ app.get("/", (c) => {
 
 underPressure(
   (handlers) => {
-    const newApp = Hono().use(...handlers);
+    const newApp = new Hono().use(...handlers);
     newApp.route("/", app);
     return serve(newApp);
   },
@@ -147,7 +147,7 @@ app.get("/", (c) => {
 
 underPressure(
   (handlers) => {
-    const newApp = Hono().use(...handlers);
+    const newApp = new Hono().use(...handlers);
     newApp.route("/", app);
     return serve(newApp);
   },
