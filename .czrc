@@ -1,6 +1,10 @@
 {
   "scopes": [
     {
+      "value": "sandbox",
+      "name": "sandbox:               anything sandbox specific"
+    },
+    {
       "value": "core",
       "name": "core:                  anything core specific"
     }

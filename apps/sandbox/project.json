@@ -1,0 +1,12 @@
+{
+  "name": "sandbox",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/sandbox/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "serve": {
+      "command": "tsx watch --tsconfig apps/sandbox/tsconfig.json apps/sandbox/src/index.ts"
+    }
+  }
+}
