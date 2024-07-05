@@ -5,8 +5,52 @@
   "projectType": "application",
   "tags": [],
   "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "platform": "node",
+        "outputPath": "dist/apps/sandbox",
+        "format": ["cjs"],
+        "bundle": false,
+        "main": "apps/sandbox/src/main.ts",
+        "tsConfig": "apps/sandbox/tsconfig.app.json",
+        "assets": ["apps/sandbox/src/assets"],
+        "generatePackageJson": true,
+        "esbuildOptions": {
+          "sourcemap": true,
+          "outExtension": {
+            ".js": ".js"
+          }
+        }
+      },
+      "configurations": {
+        "development": {},
+        "production": {
+          "esbuildOptions": {
+            "sourcemap": false,
+            "outExtension": {
+              ".js": ".js"
+            }
+          }
+        }
+      }
+    },
     "serve": {
-      "command": "tsx watch --tsconfig apps/sandbox/tsconfig.json apps/sandbox/src/index.ts"
+      "executor": "@nx/js:node",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "sandbox:build"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "sandbox:build:development"
+        },
+        "production": {
+          "buildTarget": "sandbox:build:production"
+        }
+      }
     }
   }
 }
